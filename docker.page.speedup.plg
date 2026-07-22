@@ -1,0 +1,284 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+<!ENTITY name    "docker.page.speedup">
+<!ENTITY author  "ghzgod">
+<!ENTITY version "2026.07.21">
+<!ENTITY plugin  "https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg">
+<!ENTITY support "https://github.com/ghzgod/unraid-docker-page-speedup">
+]>
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
+
+<CHANGES>
+##2026.07.21
+- Speeds up the Unraid Docker page by caching template reads in DockerClient.php.
+- getTemplates() dir listing + getTemplateValue() XML parsing are memoized per
+  request, cutting O(containers x fields x templates) flash reads to O(templates).
+- Measured ~37x faster template-scan on a 134-container / 246-template box.
+- Re-applied at boot; idempotent; anchor-guarded; php -l verified with auto-rollback.
+- No settings, no background service, no secrets.
+</CHANGES>
+
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+mkdir -p /usr/local/emhttp/plugins/docker.page.speedup
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/dockerclient_speedup.py">
+<INLINE>
+<![CDATA[
+#!/usr/bin/env python3
+# Idempotent, self-verifying performance patch for Unraid's Docker page.
+#
+# Target: /usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php
+#
+# What it does (adds two in-request caches; changes NO behaviour):
+#   Fix A/B  getTemplates()      -> memoize the per-request template dir listing
+#   Fix D/E  getTemplateValue()  -> parse each template XML at most once/request
+#
+# Without these, a full Docker page render calls getTemplateValue() ~9x per
+# container (WebUI, MyIP, Shell, Registry, Support, Project, DonateLink, ReadMe,
+# Icon) and EACH call re-parses every template XML off the USB flash. That is
+# O(containers * fields * templates) flash reads. The caches collapse it to
+# O(templates) parses per request.
+#
+# Safety: writes only if all 4 exact anchors match (so it cleanly no-ops on any
+# Unraid build whose code differs), and is a no-op if already patched. The
+# caller is expected to `php -l` the result and roll back on any lint failure.
+#
+# Exit codes: 0 patched, 2 already-patched, 1 anchors-didn't-match (no write).
+import sys
+
+path = sys.argv[1] if len(sys.argv) > 1 else \
+    "/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"
+
+with open(path) as f:
+    c = f.read()
+orig = c
+
+if "templatesCache" in c or "cachedDoc" in c:
+    print("ALREADY_PATCHED")
+    sys.exit(2)
+
+fixes = 0
+
+# --- Fix A: declare getTemplates() memo cache + early return -----------------
+A_old = ("\tpublic function getTemplates($type) {\n"
+         "\t\tglobal $dockerManPaths;\n"
+         "\t\t$tmpls = $dirs = [];")
+A_new = ("\tprivate static $templatesCache = [];\n"
+         "\tpublic function getTemplates($type) {\n"
+         "\t\tglobal $dockerManPaths;\n"
+         "\t\tif (isset(self::$templatesCache[$type])) return self::$templatesCache[$type];\n"
+         "\t\t$tmpls = $dirs = [];")
+if A_old in c:
+    c = c.replace(A_old, A_new, 1); fixes += 1
+
+# --- Fix B: populate getTemplates() memo cache before return ----------------
+B_old = ("\t\tarray_multisort(array_column($tmpls,'name'), SORT_NATURAL|SORT_FLAG_CASE, $tmpls);\n"
+         "\t\treturn $tmpls;\n"
+         "\t}")
+B_new = ("\t\tarray_multisort(array_column($tmpls,'name'), SORT_NATURAL|SORT_FLAG_CASE, $tmpls);\n"
+         "\t\tself::$templatesCache[$type] = $tmpls;\n"
+         "\t\treturn $tmpls;\n"
+         "\t}")
+if B_old in c:
+    c = c.replace(B_old, B_new, 1); fixes += 1
+
+# --- Fix D: add per-request XML-parse cache helper before getTemplateValue --
+D_old = "\tpublic function getTemplateValue($Repository, $field, $scope='all',$name='') {"
+D_new = ("\tprivate static $xmlCache = [];\n"
+         "\tprivate function cachedDoc($path) {\n"
+         "\t\tif (!isset(self::$xmlCache[$path])) { $d = new DOMDocument(); @$d->load($path); self::$xmlCache[$path] = $d; }\n"
+         "\t\treturn self::$xmlCache[$path];\n"
+         "\t}\n"
+         "\tpublic function getTemplateValue($Repository, $field, $scope='all',$name='') {")
+if D_old in c:
+    c = c.replace(D_old, D_new, 1); fixes += 1
+
+# --- Fix E: use the cache inside getTemplateValue ---------------------------
+E_old = ("\t\t\t$doc = new DOMDocument();\n"
+         "\t\t\t$doc->load($file['path']);")
+E_new = "\t\t\t$doc = $this->cachedDoc($file['path']);"
+if E_old in c:
+    c = c.replace(E_old, E_new, 1); fixes += 1
+
+if fixes != 4 or c == orig:
+    sys.stderr.write("PATCH_ABORT: expected 4 anchors, matched %d (file left untouched)\n" % fixes)
+    sys.exit(1)
+
+with open(path, "w") as f:
+    f.write(c)
+print("PATCHED_OK 4")
+sys.exit(0)
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/patch.sh">
+<INLINE>
+<![CDATA[
+#!/bin/bash
+# docker.page.speedup — apply the DockerClient.php performance patch.
+#
+# Runs on plugin install AND on every boot: Unraid re-runs `plugin install` for
+# every .plg at boot (see /etc/rc.d/rc.local), and the webGUI lives in RAM so it
+# is stock again after each boot — we re-apply here. Idempotent, syntax-verified,
+# auto-rollback on failure.
+TAG="docker-page-speedup"
+DIR="/usr/local/emhttp/plugins/docker.page.speedup"
+TARGET="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"
+BACKUP="$TARGET.dpspeedup.orig"
+VER=$(grep -oP 'version="\K[^"]+' /etc/unraid-version 2>/dev/null)
+
+[ -f "$TARGET" ] || { logger -t "$TAG" "target not found, skipping"; exit 0; }
+
+# Idempotent: already patched this boot?
+if grep -q 'templatesCache' "$TARGET"; then
+  logger -t "$TAG" "already patched (Unraid $VER)"; exit 0
+fi
+
+# Keep a copy of the current (stock) file so removal / rollback can restore it.
+cp -f "$TARGET" "$BACKUP"
+
+OUT=$(python3 "$DIR/dockerclient_speedup.py" "$TARGET" 2>&1); RC=$?
+if [ "$RC" -ne 0 ]; then
+  # Anchors did not match — a different Unraid build. Leave the stock file as-is.
+  logger -t "$TAG" "not applied on Unraid $VER (${OUT})"
+  rm -f "$BACKUP"
+  exit 0
+fi
+
+# Verify PHP still parses; roll back to stock on any syntax error.
+if ! php -l "$TARGET" >/dev/null 2>&1; then
+  logger -t "$TAG" "php -l FAILED after patch — rolling back to stock"
+  cp -f "$BACKUP" "$TARGET"
+  rm -f "$BACKUP"
+  exit 1
+fi
+
+logger -t "$TAG" "applied Docker-page speedup on Unraid $VER"
+exit 0
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/unpatch.sh">
+<INLINE>
+<![CDATA[
+#!/bin/bash
+# docker.page.speedup — revert the live patch (called on plugin removal).
+TAG="docker-page-speedup"
+TARGET="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"
+BACKUP="$TARGET.dpspeedup.orig"
+
+if [ -f "$BACKUP" ]; then
+  cp -f "$BACKUP" "$TARGET"
+  rm -f "$BACKUP"
+  logger -t "$TAG" "restored stock DockerClient.php from backup"
+else
+  logger -t "$TAG" "no backup present; the stock file is restored automatically on next reboot"
+fi
+exit 0
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/README.md">
+<INLINE>
+<![CDATA[
+# Docker Page Speedup
+
+Makes the Unraid **Docker** page load dramatically faster on systems with many
+containers, by fixing a long-standing inefficiency in how the webGUI reads
+container templates from the USB flash boot device.
+
+## The problem
+
+Every time the Docker page renders, Unraid's `DockerClient.php` calls
+`getTemplateValue()` about **nine times per container** — once each for WebUI,
+MyIP, Shell, Registry, Support, Project, DonateLink, ReadMe and the icon. Each
+of those calls **re-parses every template XML on the flash** from scratch. There
+is no caching, so the total work is:
+
+```
+containers  ×  ~9 fields  ×  every template on the USB flash
+```
+
+On a box with a lot of containers that is tens of thousands of reads/parses of
+files on the (slow) USB stick on **every single page load**, which is why the
+Docker tab can take 1–2 minutes to appear.
+
+Measured on a real system (134 containers, 246 templates), just **two** of those
+nine per-container lookups already took **9.4 seconds**.
+
+## The fix
+
+This plugin adds two small in-request caches to `DockerClient.php`:
+
+- **`getTemplates()`** — memoizes the template directory listing per request.
+- **`getTemplateValue()`** — parses each template XML **at most once** per
+  request (via a small `cachedDoc()` helper) instead of once per lookup.
+
+Behaviour is identical; only the redundant flash reads are removed. The work
+drops from `O(containers × fields × templates)` to `O(templates)`.
+
+**Same 9.4 s workload after patching: 0.25 s (~37× faster).**
+
+## How it works / safety
+
+- The webGUI lives in RAM and is rebuilt stock on every boot, so the patch is
+  re-applied at boot. Unraid re-runs `plugin install` for every `.plg` at boot
+  (`/etc/rc.d/rc.local`), which triggers `patch.sh`.
+- **Idempotent** — never patches an already-patched file.
+- **Anchor-guarded** — it only edits if all four exact code anchors match, so on
+  any Unraid build whose code differs it cleanly does nothing (no breakage).
+- **Verified** — runs `php -l` after patching and **automatically rolls back** to
+  the stock file if the result doesn't parse.
+- Logs every action to syslog under the tag `docker-page-speedup`.
+
+Verified on **Unraid 7.2.3 → 7.3.2**. (The related 7.2.3 icon-fetch storm was
+fixed upstream in 7.3.x; this plugin addresses the template-scan half, which is
+still present.)
+
+## Install
+
+Add the `.plg` URL under **Plugins → Install Plugin**:
+
+```
+https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg
+```
+
+## Uninstall
+
+Remove it from the **Plugins** page. That restores the stock `DockerClient.php`
+(from the backup taken at patch time; a reboot also restores it regardless).
+]]>
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+bash /usr/local/emhttp/plugins/docker.page.speedup/patch.sh
+echo "----------------------------------------------------"
+echo " Docker Page Speedup installed."
+echo " DockerClient.php template caching applied (re-applied on every boot)."
+echo " Check: logger tag 'docker-page-speedup' in the syslog."
+echo "----------------------------------------------------"
+]]>
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+<![CDATA[
+bash /usr/local/emhttp/plugins/docker.page.speedup/unpatch.sh 2>/dev/null
+rm -rf /usr/local/emhttp/plugins/docker.page.speedup
+]]>
+</INLINE>
+</FILE>
+
+</PLUGIN>

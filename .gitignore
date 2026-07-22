@@ -1,0 +1,5 @@
+.DS_Store
+.playwright-mcp/
+docs/superpowers/
+__pycache__/
+*.pyc
