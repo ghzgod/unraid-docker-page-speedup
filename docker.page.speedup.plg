@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "docker.page.speedup">
 <!ENTITY author  "ghzgod">
-<!ENTITY version "2026.07.22">
+<!ENTITY version "2026.07.23">
 <!ENTITY launch  "Settings/DockerPageSpeedup">
 <!ENTITY plugin  "https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg">
 <!ENTITY support "https://github.com/ghzgod/unraid-docker-page-speedup">
@@ -10,13 +10,14 @@
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
 
 <CHANGES>
-##2026.07.22
+##2026.07.23
 - New: Settings page (Settings -> Utilities -> Docker Page Speedup, or click the bolt icon)
   to toggle the page-load speedup and set the Docker stats refresh interval.
 - New: configurable Docker stats refresh (default 5s) throttles nchan/docker_load, cutting
   CPU/GPU load from the stock 1s live-stats repaint while the Docker page is open.
 - Page-load speedup measured ~9x cold / ~56x warm on a 134-container box.
-- Fix: shorter plugin description so it renders like stock plugins on the Plugins page.
+- Fix: Plugins-page description renders at normal size — README is a bold title with a
+  plain-text body (the webGUI styles headings and body bold at 1.3rem, i.e. oversized).
 - Config-driven, idempotent, anchor-guarded, php -l verified with auto-rollback; both
   patches fully reverted on uninstall.
 </CHANGES>
@@ -283,7 +284,7 @@ _Docker stats refresh interval_:
 <![CDATA[
 **Docker Page Speedup**
 
-Makes the Unraid Docker page load faster and cuts its CPU/GPU load on systems with many containers. It caches container-template reads in the webGUI and lets you throttle how often the page refreshes live container stats. Configure it under **Settings → Utilities → Docker Page Speedup**, or click this plugin's bolt icon.
+Makes the Unraid Docker page load faster and cuts its CPU/GPU load on systems with many containers. It caches container-template reads in the webGUI and lets you throttle how often the page refreshes live container stats. Configure it under Settings, Utilities, Docker Page Speedup, or click this plugin's bolt icon.
 ]]>
 </INLINE>
 </FILE>

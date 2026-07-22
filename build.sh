@@ -49,7 +49,8 @@ cat <<XMLHEAD
 - New: configurable Docker stats refresh (default 5s) throttles nchan/docker_load, cutting
   CPU/GPU load from the stock 1s live-stats repaint while the Docker page is open.
 - Page-load speedup measured ~9x cold / ~56x warm on a 134-container box.
-- Fix: shorter plugin description so it renders like stock plugins on the Plugins page.
+- Fix: Plugins-page description renders at normal size — README is a bold title with a
+  plain-text body (the webGUI styles headings and body bold at 1.3rem, i.e. oversized).
 - Config-driven, idempotent, anchor-guarded, php -l verified with auto-rollback; both
   patches fully reverted on uninstall.
 </CHANGES>
