@@ -2,20 +2,23 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "docker.page.speedup">
 <!ENTITY author  "ghzgod">
-<!ENTITY version "2026.07.21">
+<!ENTITY version "2026.07.22">
+<!ENTITY launch  "Settings/DockerPageSpeedup">
 <!ENTITY plugin  "https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg">
 <!ENTITY support "https://github.com/ghzgod/unraid-docker-page-speedup">
 ]>
-<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
 
 <CHANGES>
-##2026.07.21
-- Speeds up the Unraid Docker page by caching template reads in DockerClient.php.
-- getTemplates() dir listing + getTemplateValue() XML parsing are memoized per
-  request, cutting O(containers x fields x templates) flash reads to O(templates).
-- Measured ~37x faster template-scan on a 134-container / 246-template box.
-- Re-applied at boot; idempotent; anchor-guarded; php -l verified with auto-rollback.
-- No settings, no background service, no secrets.
+##2026.07.22
+- New: Settings page (Settings -> Utilities -> Docker Page Speedup, or click the bolt icon)
+  to toggle the page-load speedup and set the Docker stats refresh interval.
+- New: configurable Docker stats refresh (default 5s) throttles nchan/docker_load, cutting
+  CPU/GPU load from the stock 1s live-stats repaint while the Docker page is open.
+- Page-load speedup measured ~9x cold / ~56x warm on a 134-container box.
+- Fix: shorter plugin description so it renders like stock plugins on the Plugins page.
+- Config-driven, idempotent, anchor-guarded, php -l verified with auto-rollback; both
+  patches fully reverted on uninstall.
 </CHANGES>
 
 <FILE Run="/bin/bash">
@@ -117,49 +120,78 @@ sys.exit(0)
 </INLINE>
 </FILE>
 
-<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/patch.sh">
+<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/apply.sh">
 <INLINE>
 <![CDATA[
 #!/bin/bash
-# docker.page.speedup — apply the DockerClient.php performance patch.
+# apply.sh — config-driven application of the two Docker-page optimizations.
 #
-# Runs on plugin install AND on every boot: Unraid re-runs `plugin install` for
-# every .plg at boot (see /etc/rc.d/rc.local), and the webGUI lives in RAM so it
-# is stock again after each boot — we re-apply here. Idempotent, syntax-verified,
-# auto-rollback on failure.
+# Invoked:
+#   * at plugin install / every boot  (via the .plg <FILE Run>)
+#   * after Settings -> Apply          (via the page's #command)
+# Reads /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg (which
+# update.php has already written before calling us) and makes the live webGUI
+# match it. Idempotent, php -l verified with auto-rollback, fully reversible.
 TAG="docker-page-speedup"
 DIR="/usr/local/emhttp/plugins/docker.page.speedup"
-TARGET="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"
-BACKUP="$TARGET.dpspeedup.orig"
-VER=$(grep -oP 'version="\K[^"]+' /etc/unraid-version 2>/dev/null)
+CFG="/boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg"
+DC="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"
+DCBAK="$DC.dpspeedup.orig"
+DL="/usr/local/emhttp/plugins/dynamix.docker.manager/nchan/docker_load"
+DLBAK="$DL.dpspeedup.orig"
 
-[ -f "$TARGET" ] || { logger -t "$TAG" "target not found, skipping"; exit 0; }
+# --- read config (fall back to sane defaults) ------------------------------
+TEMPLATE_CACHE=1
+STATS_INTERVAL=5
+if [ -f "$CFG" ]; then
+  v=$(grep -E '^TEMPLATE_CACHE=' "$CFG" | head -1 | cut -d'"' -f2); [ -n "$v" ] && TEMPLATE_CACHE="$v"
+  v=$(grep -E '^STATS_INTERVAL='  "$CFG" | head -1 | cut -d'"' -f2); [ -n "$v" ] && STATS_INTERVAL="$v"
+fi
+case "$STATS_INTERVAL" in ''|*[!0-9]*) STATS_INTERVAL=5;; esac
+[ "$STATS_INTERVAL" -lt 1 ]  && STATS_INTERVAL=1
+[ "$STATS_INTERVAL" -gt 60 ] && STATS_INTERVAL=60
 
-# Idempotent: already patched this boot?
-if grep -q 'templatesCache' "$TARGET"; then
-  logger -t "$TAG" "already patched (Unraid $VER)"; exit 0
+# --- 1) DockerClient.php template-read caching (page-load speedup) ----------
+if [ -f "$DC" ]; then
+  if [ "$TEMPLATE_CACHE" = "1" ]; then
+    if ! grep -q 'templatesCache' "$DC"; then
+      cp -f "$DC" "$DCBAK"
+      if python3 "$DIR/dockerclient_speedup.py" "$DC" >/dev/null 2>&1 && php -l "$DC" >/dev/null 2>&1; then
+        logger -t "$TAG" "template cache ON (Unraid $(grep -oP 'version="\K[^"]+' /etc/unraid-version 2>/dev/null))"
+      else
+        cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"
+        logger -t "$TAG" "template cache patch failed php -l — rolled back to stock"
+      fi
+    fi
+  else
+    if grep -q 'templatesCache' "$DC" && [ -f "$DCBAK" ]; then
+      cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"
+      logger -t "$TAG" "template cache OFF — restored stock DockerClient.php"
+    fi
+  fi
 fi
 
-# Keep a copy of the current (stock) file so removal / rollback can restore it.
-cp -f "$TARGET" "$BACKUP"
-
-OUT=$(python3 "$DIR/dockerclient_speedup.py" "$TARGET" 2>&1); RC=$?
-if [ "$RC" -ne 0 ]; then
-  # Anchors did not match — a different Unraid build. Leave the stock file as-is.
-  logger -t "$TAG" "not applied on Unraid $VER (${OUT})"
-  rm -f "$BACKUP"
-  exit 0
+# --- 2) docker_load live-stats refresh interval (CPU/GPU load) --------------
+# The stock nchan pusher runs `docker stats` on every container every 1s while
+# the Docker page is open, forcing a full table repaint each second (heavy on
+# CPU and on the browser GPU). We reset to stock, then set the chosen interval.
+if [ -f "$DL" ]; then
+  [ -f "$DLBAK" ] || cp -f "$DL" "$DLBAK"   # capture pristine stock once (boot = stock)
+  cp -f "$DLBAK" "$DL"                        # always start from stock so it's re-configurable
+  if [ "$STATS_INTERVAL" -gt 1 ]; then
+    sed -i "s/sleep(1);/sleep(${STATS_INTERVAL});/" "$DL"
+    logger -t "$TAG" "docker stats refresh = ${STATS_INTERVAL}s"
+  else
+    logger -t "$TAG" "docker stats refresh = 1s (stock)"
+  fi
+  # respawn the running pusher (if the page is open) so the change takes effect now.
+  # Only kill the real pusher — a php process running the script — never a shell
+  # that merely references the path (matched by cmdline). Check the actual exe.
+  for p in $(pgrep -f "nchan/docker_load" 2>/dev/null); do
+    [ "$p" = "$$" ] && continue
+    case "$(readlink -f /proc/$p/exe 2>/dev/null)" in */php*) kill "$p" 2>/dev/null;; esac
+  done
 fi
-
-# Verify PHP still parses; roll back to stock on any syntax error.
-if ! php -l "$TARGET" >/dev/null 2>&1; then
-  logger -t "$TAG" "php -l FAILED after patch — rolling back to stock"
-  cp -f "$BACKUP" "$TARGET"
-  rm -f "$BACKUP"
-  exit 1
-fi
-
-logger -t "$TAG" "applied Docker-page speedup on Unraid $VER"
 exit 0
 ]]>
 </INLINE>
@@ -169,19 +201,79 @@ exit 0
 <INLINE>
 <![CDATA[
 #!/bin/bash
-# docker.page.speedup — revert the live patch (called on plugin removal).
+# unpatch.sh — revert BOTH live patches to stock (called on plugin removal).
 TAG="docker-page-speedup"
-TARGET="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"
-BACKUP="$TARGET.dpspeedup.orig"
+DC="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"; DCBAK="$DC.dpspeedup.orig"
+DL="/usr/local/emhttp/plugins/dynamix.docker.manager/nchan/docker_load";        DLBAK="$DL.dpspeedup.orig"
 
-if [ -f "$BACKUP" ]; then
-  cp -f "$BACKUP" "$TARGET"
-  rm -f "$BACKUP"
-  logger -t "$TAG" "restored stock DockerClient.php from backup"
-else
-  logger -t "$TAG" "no backup present; the stock file is restored automatically on next reboot"
-fi
+[ -f "$DCBAK" ] && { cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"; logger -t "$TAG" "restored stock DockerClient.php"; }
+[ -f "$DLBAK" ] && { cp -f "$DLBAK" "$DL"; rm -f "$DLBAK"; logger -t "$TAG" "restored stock docker_load"; }
+# respawn only the real php pusher, never a shell that references the path
+for p in $(pgrep -f "nchan/docker_load" 2>/dev/null); do
+  [ "$p" = "$$" ] && continue
+  case "$(readlink -f /proc/$p/exe 2>/dev/null)" in */php*) kill "$p" 2>/dev/null;; esac
+done
 exit 0
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/default.cfg">
+<INLINE>
+<![CDATA[
+TEMPLATE_CACHE="1"
+STATS_INTERVAL="5"
+]]>
+</INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/DockerPageSpeedup.page">
+<INLINE>
+<![CDATA[
+Menu="Utilities"
+Title="Docker Page Speedup"
+---
+<?PHP
+/* Docker Page Speedup — settings. Config auto-loads as $docker_page_speedup_cfg
+   from /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg */
+$cfg = $docker_page_speedup_cfg ?? [];
+$tc  = $cfg['TEMPLATE_CACHE'] ?? '1';
+$si  = $cfg['STATS_INTERVAL'] ?? '5';
+?>
+
+<form markdown="1" name="docker_page_speedup" method="POST" action="/update.php" target="progressFrame">
+<input type="hidden" name="#file" value="docker.page.speedup/docker.page.speedup.cfg">
+<input type="hidden" name="#command" value="/plugins/docker.page.speedup/apply.sh">
+
+_Page-load speedup_:
+: <select name="TEMPLATE_CACHE" size="1">
+  <?=mk_option($tc, "1", "Enabled");?>
+  <?=mk_option($tc, "0", "Disabled");?>
+  </select>
+
+> Caches container-template reads in the webGUI (DockerClient.php) so the Docker
+> page builds far faster on systems with many containers. Disabling immediately
+> restores the stock file.
+
+_Docker stats refresh interval_:
+: <select name="STATS_INTERVAL" size="1">
+  <?=mk_option($si, "1",  "1 second (Unraid stock)");?>
+  <?=mk_option($si, "2",  "2 seconds");?>
+  <?=mk_option($si, "3",  "3 seconds");?>
+  <?=mk_option($si, "5",  "5 seconds (recommended)");?>
+  <?=mk_option($si, "10", "10 seconds");?>
+  <?=mk_option($si, "15", "15 seconds");?>
+  </select>
+
+> How often the Docker page refreshes live container CPU/memory stats. The stock
+> 1-second refresh runs `docker stats` on every container each second and repaints
+> the whole table — heavy on CPU and on the browser's GPU while the page is open.
+> A higher interval sharply cuts that load. Takes effect on the next Docker page load.
+
+&nbsp;
+: <input type="submit" name="#apply" value="Apply"><input type="button" value="Done" onclick="done()">
+
+</form>
 ]]>
 </INLINE>
 </FILE>
@@ -189,72 +281,9 @@ exit 0
 <FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/README.md">
 <INLINE>
 <![CDATA[
-# Docker Page Speedup
+**Docker Page Speedup**
 
-Makes the Unraid **Docker** page load dramatically faster on systems with many
-containers, by fixing a long-standing inefficiency in how the webGUI reads
-container templates from the USB flash boot device.
-
-## The problem
-
-Every time the Docker page renders, Unraid's `DockerClient.php` calls
-`getTemplateValue()` about **nine times per container** — once each for WebUI,
-MyIP, Shell, Registry, Support, Project, DonateLink, ReadMe and the icon. Each
-of those calls **re-parses every template XML on the flash** from scratch. There
-is no caching, so the total work is:
-
-```
-containers  ×  ~9 fields  ×  every template on the USB flash
-```
-
-On a box with a lot of containers that is tens of thousands of reads/parses of
-files on the (slow) USB stick on **every single page load**, which is why the
-Docker tab can take 1–2 minutes to appear.
-
-Measured on a real system (134 containers, 246 templates), just **two** of those
-nine per-container lookups already took **9.4 seconds**.
-
-## The fix
-
-This plugin adds two small in-request caches to `DockerClient.php`:
-
-- **`getTemplates()`** — memoizes the template directory listing per request.
-- **`getTemplateValue()`** — parses each template XML **at most once** per
-  request (via a small `cachedDoc()` helper) instead of once per lookup.
-
-Behaviour is identical; only the redundant flash reads are removed. The work
-drops from `O(containers × fields × templates)` to `O(templates)`.
-
-**Same 9.4 s workload after patching: 0.25 s (~37× faster).**
-
-## How it works / safety
-
-- The webGUI lives in RAM and is rebuilt stock on every boot, so the patch is
-  re-applied at boot. Unraid re-runs `plugin install` for every `.plg` at boot
-  (`/etc/rc.d/rc.local`), which triggers `patch.sh`.
-- **Idempotent** — never patches an already-patched file.
-- **Anchor-guarded** — it only edits if all four exact code anchors match, so on
-  any Unraid build whose code differs it cleanly does nothing (no breakage).
-- **Verified** — runs `php -l` after patching and **automatically rolls back** to
-  the stock file if the result doesn't parse.
-- Logs every action to syslog under the tag `docker-page-speedup`.
-
-Verified on **Unraid 7.2.3 → 7.3.2**. (The related 7.2.3 icon-fetch storm was
-fixed upstream in 7.3.x; this plugin addresses the template-scan half, which is
-still present.)
-
-## Install
-
-Add the `.plg` URL under **Plugins → Install Plugin**:
-
-```
-https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg
-```
-
-## Uninstall
-
-Remove it from the **Plugins** page. That restores the stock `DockerClient.php`
-(from the backup taken at patch time; a reboot also restores it regardless).
+Makes the Unraid Docker page load faster and cuts its CPU/GPU load on systems with many containers. It caches container-template reads in the webGUI and lets you throttle how often the page refreshes live container stats. Configure it under **Settings → Utilities → Docker Page Speedup**, or click this plugin's bolt icon.
 ]]>
 </INLINE>
 </FILE>
@@ -262,11 +291,19 @@ Remove it from the **Plugins** page. That restores the stock `DockerClient.php`
 <FILE Run="/bin/bash">
 <INLINE>
 <![CDATA[
-bash /usr/local/emhttp/plugins/docker.page.speedup/patch.sh
+# seed persistent config on flash (preserve user settings across updates)
+mkdir -p /boot/config/plugins/docker.page.speedup
+[ -f /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg ] || \
+  cp /usr/local/emhttp/plugins/docker.page.speedup/default.cfg \
+     /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg
+chmod +x /usr/local/emhttp/plugins/docker.page.speedup/apply.sh \
+         /usr/local/emhttp/plugins/docker.page.speedup/unpatch.sh
+# apply per the saved config
+bash /usr/local/emhttp/plugins/docker.page.speedup/apply.sh
 echo "----------------------------------------------------"
 echo " Docker Page Speedup installed."
-echo " DockerClient.php template caching applied (re-applied on every boot)."
-echo " Check: logger tag 'docker-page-speedup' in the syslog."
+echo " Settings -> Utilities -> Docker Page Speedup (or the bolt icon)."
+echo " Re-applied on every boot. syslog tag: docker-page-speedup"
 echo "----------------------------------------------------"
 ]]>
 </INLINE>
@@ -277,6 +314,7 @@ echo "----------------------------------------------------"
 <![CDATA[
 bash /usr/local/emhttp/plugins/docker.page.speedup/unpatch.sh 2>/dev/null
 rm -rf /usr/local/emhttp/plugins/docker.page.speedup
+rm -rf /boot/config/plugins/docker.page.speedup
 ]]>
 </INLINE>
 </FILE>

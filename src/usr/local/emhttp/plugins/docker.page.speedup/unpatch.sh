@@ -1,14 +1,14 @@
 #!/bin/bash
-# docker.page.speedup — revert the live patch (called on plugin removal).
+# unpatch.sh — revert BOTH live patches to stock (called on plugin removal).
 TAG="docker-page-speedup"
-TARGET="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"
-BACKUP="$TARGET.dpspeedup.orig"
+DC="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"; DCBAK="$DC.dpspeedup.orig"
+DL="/usr/local/emhttp/plugins/dynamix.docker.manager/nchan/docker_load";        DLBAK="$DL.dpspeedup.orig"
 
-if [ -f "$BACKUP" ]; then
-  cp -f "$BACKUP" "$TARGET"
-  rm -f "$BACKUP"
-  logger -t "$TAG" "restored stock DockerClient.php from backup"
-else
-  logger -t "$TAG" "no backup present; the stock file is restored automatically on next reboot"
-fi
+[ -f "$DCBAK" ] && { cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"; logger -t "$TAG" "restored stock DockerClient.php"; }
+[ -f "$DLBAK" ] && { cp -f "$DLBAK" "$DL"; rm -f "$DLBAK"; logger -t "$TAG" "restored stock docker_load"; }
+# respawn only the real php pusher, never a shell that references the path
+for p in $(pgrep -f "nchan/docker_load" 2>/dev/null); do
+  [ "$p" = "$$" ] && continue
+  case "$(readlink -f /proc/$p/exe 2>/dev/null)" in */php*) kill "$p" 2>/dev/null;; esac
+done
 exit 0

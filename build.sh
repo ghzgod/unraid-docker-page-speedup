@@ -7,15 +7,15 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-VERSION="${1:-2026.07.21}"
+VERSION="${1:-2026.07.22}"
 NAME="docker.page.speedup"
 SRC="src/usr/local/emhttp/plugins/$NAME"
 OUT="$NAME.plg"
 PLUGIN_URL="https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg"
 SUPPORT_URL="https://github.com/ghzgod/unraid-docker-page-speedup"
 
-# --- payload files (order: patcher, apply, revert, readme) -----------------
-FILES=(dockerclient_speedup.py patch.sh unpatch.sh README.md)
+# --- payload files installed to /usr/local/emhttp/plugins/<name>/ ----------
+FILES=(dockerclient_speedup.py apply.sh unpatch.sh default.cfg DockerPageSpeedup.page README.md)
 
 # guard: CDATA cannot contain ]]>
 for f in "${FILES[@]}"; do
@@ -36,19 +36,22 @@ cat <<XMLHEAD
 <!ENTITY name    "$NAME">
 <!ENTITY author  "ghzgod">
 <!ENTITY version "$VERSION">
+<!ENTITY launch  "Settings/DockerPageSpeedup">
 <!ENTITY plugin  "$PLUGIN_URL">
 <!ENTITY support "$SUPPORT_URL">
 ]>
-<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
 
 <CHANGES>
 ##$VERSION
-- Speeds up the Unraid Docker page by caching template reads in DockerClient.php.
-- getTemplates() dir listing + getTemplateValue() XML parsing are memoized per
-  request, cutting O(containers x fields x templates) flash reads to O(templates).
-- Measured ~37x faster template-scan on a 134-container / 246-template box.
-- Re-applied at boot; idempotent; anchor-guarded; php -l verified with auto-rollback.
-- No settings, no background service, no secrets.
+- New: Settings page (Settings -> Utilities -> Docker Page Speedup, or click the bolt icon)
+  to toggle the page-load speedup and set the Docker stats refresh interval.
+- New: configurable Docker stats refresh (default 5s) throttles nchan/docker_load, cutting
+  CPU/GPU load from the stock 1s live-stats repaint while the Docker page is open.
+- Page-load speedup measured ~9x cold / ~56x warm on a 134-container box.
+- Fix: shorter plugin description so it renders like stock plugins on the Plugins page.
+- Config-driven, idempotent, anchor-guarded, php -l verified with auto-rollback; both
+  patches fully reverted on uninstall.
 </CHANGES>
 
 <FILE Run="/bin/bash">
@@ -67,11 +70,19 @@ cat <<'POSTINSTALL'
 <FILE Run="/bin/bash">
 <INLINE>
 <![CDATA[
-bash /usr/local/emhttp/plugins/docker.page.speedup/patch.sh
+# seed persistent config on flash (preserve user settings across updates)
+mkdir -p /boot/config/plugins/docker.page.speedup
+[ -f /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg ] || \
+  cp /usr/local/emhttp/plugins/docker.page.speedup/default.cfg \
+     /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg
+chmod +x /usr/local/emhttp/plugins/docker.page.speedup/apply.sh \
+         /usr/local/emhttp/plugins/docker.page.speedup/unpatch.sh
+# apply per the saved config
+bash /usr/local/emhttp/plugins/docker.page.speedup/apply.sh
 echo "----------------------------------------------------"
 echo " Docker Page Speedup installed."
-echo " DockerClient.php template caching applied (re-applied on every boot)."
-echo " Check: logger tag 'docker-page-speedup' in the syslog."
+echo " Settings -> Utilities -> Docker Page Speedup (or the bolt icon)."
+echo " Re-applied on every boot. syslog tag: docker-page-speedup"
 echo "----------------------------------------------------"
 ]]>
 </INLINE>
@@ -82,6 +93,7 @@ echo "----------------------------------------------------"
 <![CDATA[
 bash /usr/local/emhttp/plugins/docker.page.speedup/unpatch.sh 2>/dev/null
 rm -rf /usr/local/emhttp/plugins/docker.page.speedup
+rm -rf /boot/config/plugins/docker.page.speedup
 ]]>
 </INLINE>
 </FILE>

@@ -1,0 +1,44 @@
+Menu="Utilities"
+Title="Docker Page Speedup"
+---
+<?PHP
+/* Docker Page Speedup — settings. Config auto-loads as $docker_page_speedup_cfg
+   from /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg */
+$cfg = $docker_page_speedup_cfg ?? [];
+$tc  = $cfg['TEMPLATE_CACHE'] ?? '1';
+$si  = $cfg['STATS_INTERVAL'] ?? '5';
+?>
+
+<form markdown="1" name="docker_page_speedup" method="POST" action="/update.php" target="progressFrame">
+<input type="hidden" name="#file" value="docker.page.speedup/docker.page.speedup.cfg">
+<input type="hidden" name="#command" value="/plugins/docker.page.speedup/apply.sh">
+
+_Page-load speedup_:
+: <select name="TEMPLATE_CACHE" size="1">
+  <?=mk_option($tc, "1", "Enabled");?>
+  <?=mk_option($tc, "0", "Disabled");?>
+  </select>
+
+> Caches container-template reads in the webGUI (DockerClient.php) so the Docker
+> page builds far faster on systems with many containers. Disabling immediately
+> restores the stock file.
+
+_Docker stats refresh interval_:
+: <select name="STATS_INTERVAL" size="1">
+  <?=mk_option($si, "1",  "1 second (Unraid stock)");?>
+  <?=mk_option($si, "2",  "2 seconds");?>
+  <?=mk_option($si, "3",  "3 seconds");?>
+  <?=mk_option($si, "5",  "5 seconds (recommended)");?>
+  <?=mk_option($si, "10", "10 seconds");?>
+  <?=mk_option($si, "15", "15 seconds");?>
+  </select>
+
+> How often the Docker page refreshes live container CPU/memory stats. The stock
+> 1-second refresh runs `docker stats` on every container each second and repaints
+> the whole table — heavy on CPU and on the browser's GPU while the page is open.
+> A higher interval sharply cuts that load. Takes effect on the next Docker page load.
+
+&nbsp;
+: <input type="submit" name="#apply" value="Apply"><input type="button" value="Done" onclick="done()">
+
+</form>
