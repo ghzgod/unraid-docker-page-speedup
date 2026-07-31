@@ -7,7 +7,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-VERSION="${1:-2026.07.22}"
+VERSION="${1:-2026.07.31}"
 NAME="docker.page.speedup"
 SRC="src/usr/local/emhttp/plugins/$NAME"
 OUT="$NAME.plg"
@@ -44,12 +44,19 @@ cat <<XMLHEAD
 
 <CHANGES>
 ##$VERSION
+- Fix: on some systems the boot-time run patched DockerClient.php, failed its own
+  php -l verification before the rest of userspace was up, and rolled back to
+  stock, leaving the page-load speedup silently off until something re-ran it. If
+  the cache is enabled but not present at the end of a run, it now retries once
+  after the system settles.
+- Added the Community Applications submission metadata (ca_profile.xml, plugin
+  wrapper) and an MIT LICENSE.
 - New: Settings page (Settings -> Utilities -> Docker Page Speedup, or click the bolt icon)
   to toggle the page-load speedup and set the Docker stats refresh interval.
 - New: configurable Docker stats refresh (default 5s) throttles nchan/docker_load, cutting
   CPU/GPU load from the stock 1s live-stats repaint while the Docker page is open.
-- Page-load speedup measured ~9x cold / ~56x warm on a 134-container box.
-- Fix: Plugins-page description renders at normal size — README is a bold title with a
+- Page-load speedup measured ~9x cold / ~56x warm on a server with well over 100 containers.
+- Fix: Plugins-page description renders at normal size. The README is a bold title with a
   plain-text body (the webGUI styles headings and body bold at 1.3rem, i.e. oversized).
 - Config-driven, idempotent, anchor-guarded, php -l verified with auto-rollback; both
   patches fully reverted on uninstall.
@@ -103,4 +110,15 @@ rm -rf /boot/config/plugins/docker.page.speedup
 POSTINSTALL
 } > "$OUT"
 
-echo "Built $OUT ($VERSION) — secret-free, ${#FILES[@]} files embedded."
+# Hard gate, not a promise: this artifact is published to a public repo, so it
+# must never carry a credential or anything identifying the machine it was built on.
+if grep -qaE 'gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|BEGIN [A-Z ]*PRIVATE KEY|ssh-rsa' "$OUT"; then
+  echo "ERROR: $OUT contains something credential shaped. Refusing to ship it." >&2
+  rm -f "$OUT"; exit 1
+fi
+if grep -qaE '(\b(192\.168|10\.)[0-9.]+)|/Users/|[a-z0-9-]+\.ts\.net' "$OUT"; then
+  echo "ERROR: $OUT contains a private IP, a local path or a Tailscale name. Refusing to ship it." >&2
+  rm -f "$OUT"; exit 1
+fi
+
+echo "Built $OUT ($VERSION), secret-free (verified), ${#FILES[@]} files embedded."

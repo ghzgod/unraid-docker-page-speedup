@@ -1,5 +1,5 @@
 #!/bin/bash
-# apply.sh — config-driven application of the two Docker-page optimizations.
+# apply.sh: config-driven application of the two Docker-page optimizations.
 #
 # Invoked:
 #   * at plugin install / every boot  (via the .plg <FILE Run>)
@@ -35,13 +35,13 @@ if [ -f "$DC" ]; then
         logger -t "$TAG" "template cache ON (Unraid $(grep -oP 'version="\K[^"]+' /etc/unraid-version 2>/dev/null))"
       else
         cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"
-        logger -t "$TAG" "template cache patch failed php -l — rolled back to stock"
+        logger -t "$TAG" "template cache patch failed php -l, rolled back to stock"
       fi
     fi
   else
     if grep -q 'templatesCache' "$DC" && [ -f "$DCBAK" ]; then
       cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"
-      logger -t "$TAG" "template cache OFF — restored stock DockerClient.php"
+      logger -t "$TAG" "template cache OFF, restored stock DockerClient.php"
     fi
   fi
 fi
@@ -60,11 +60,22 @@ if [ -f "$DL" ]; then
     logger -t "$TAG" "docker stats refresh = 1s (stock)"
   fi
   # respawn the running pusher (if the page is open) so the change takes effect now.
-  # Only kill the real pusher — a php process running the script — never a shell
+  # Only kill the real pusher (a php process running the script), never a shell
   # that merely references the path (matched by cmdline). Check the actual exe.
   for p in $(pgrep -f "nchan/docker_load" 2>/dev/null); do
     [ "$p" = "$$" ] && continue
     case "$(readlink -f /proc/$p/exe 2>/dev/null)" in */php*) kill "$p" 2>/dev/null;; esac
   done
+fi
+
+# Boot hardening. Unraid installs plugins very early: on this build the boot-time
+# run patched DockerClient.php, failed its php -l verification, and rolled back to
+# stock, leaving the speedup silently off until something re-ran this script. The
+# same run produced no syslog output at all, which is the tell that the userspace
+# it needs is not up yet. So if the cache was asked for but is not present when we
+# finish, retry once after the system settles. DPS_RETRY stops it looping.
+if [ "$TEMPLATE_CACHE" = "1" ] && [ "${DPS_RETRY:-0}" != "1" ] && ! grep -q 'templatesCache' "$DC" 2>/dev/null; then
+  logger -t "$TAG" "template cache not applied on this pass; retrying in 90s"
+  nohup bash -c "sleep 90; DPS_RETRY=1 bash '$DIR/apply.sh'" >/dev/null 2>&1 &
 fi
 exit 0

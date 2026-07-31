@@ -2,7 +2,7 @@ Menu="Utilities"
 Title="Docker Page Speedup"
 ---
 <?PHP
-/* Docker Page Speedup — settings. Config auto-loads as $docker_page_speedup_cfg
+/* Docker Page Speedup settings. Config auto-loads as $docker_page_speedup_cfg
    from /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg */
 $cfg = $docker_page_speedup_cfg ?? [];
 $tc  = $cfg['TEMPLATE_CACHE'] ?? '1';
@@ -35,7 +35,7 @@ _Docker stats refresh interval_:
 
 > How often the Docker page refreshes live container CPU/memory stats. The stock
 > 1-second refresh runs `docker stats` on every container each second and repaints
-> the whole table — heavy on CPU and on the browser's GPU while the page is open.
+> the whole table, which is heavy on CPU and on the browser's GPU while the page is open.
 > A higher interval sharply cuts that load. Takes effect on the next Docker page load.
 
 &nbsp;

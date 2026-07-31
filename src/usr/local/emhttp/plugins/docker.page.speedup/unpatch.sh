@@ -1,5 +1,5 @@
 #!/bin/bash
-# unpatch.sh — revert BOTH live patches to stock (called on plugin removal).
+# unpatch.sh: revert BOTH live patches to stock (called on plugin removal).
 TAG="docker-page-speedup"
 DC="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"; DCBAK="$DC.dpspeedup.orig"
 DL="/usr/local/emhttp/plugins/dynamix.docker.manager/nchan/docker_load";        DLBAK="$DL.dpspeedup.orig"

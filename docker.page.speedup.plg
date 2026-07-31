@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "docker.page.speedup">
 <!ENTITY author  "ghzgod">
-<!ENTITY version "2026.07.23">
+<!ENTITY version "2026.07.31">
 <!ENTITY launch  "Settings/DockerPageSpeedup">
 <!ENTITY plugin  "https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg">
 <!ENTITY support "https://github.com/ghzgod/unraid-docker-page-speedup">
@@ -10,13 +10,20 @@
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
 
 <CHANGES>
-##2026.07.23
+##2026.07.31
+- Fix: on some systems the boot-time run patched DockerClient.php, failed its own
+  php -l verification before the rest of userspace was up, and rolled back to
+  stock, leaving the page-load speedup silently off until something re-ran it. If
+  the cache is enabled but not present at the end of a run, it now retries once
+  after the system settles.
+- Added the Community Applications submission metadata (ca_profile.xml, plugin
+  wrapper) and an MIT LICENSE.
 - New: Settings page (Settings -> Utilities -> Docker Page Speedup, or click the bolt icon)
   to toggle the page-load speedup and set the Docker stats refresh interval.
 - New: configurable Docker stats refresh (default 5s) throttles nchan/docker_load, cutting
   CPU/GPU load from the stock 1s live-stats repaint while the Docker page is open.
-- Page-load speedup measured ~9x cold / ~56x warm on a 134-container box.
-- Fix: Plugins-page description renders at normal size — README is a bold title with a
+- Page-load speedup measured ~9x cold / ~56x warm on a server with well over 100 containers.
+- Fix: Plugins-page description renders at normal size. The README is a bold title with a
   plain-text body (the webGUI styles headings and body bold at 1.3rem, i.e. oversized).
 - Config-driven, idempotent, anchor-guarded, php -l verified with auto-rollback; both
   patches fully reverted on uninstall.
@@ -125,7 +132,7 @@ sys.exit(0)
 <INLINE>
 <![CDATA[
 #!/bin/bash
-# apply.sh — config-driven application of the two Docker-page optimizations.
+# apply.sh: config-driven application of the two Docker-page optimizations.
 #
 # Invoked:
 #   * at plugin install / every boot  (via the .plg <FILE Run>)
@@ -161,13 +168,13 @@ if [ -f "$DC" ]; then
         logger -t "$TAG" "template cache ON (Unraid $(grep -oP 'version="\K[^"]+' /etc/unraid-version 2>/dev/null))"
       else
         cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"
-        logger -t "$TAG" "template cache patch failed php -l — rolled back to stock"
+        logger -t "$TAG" "template cache patch failed php -l, rolled back to stock"
       fi
     fi
   else
     if grep -q 'templatesCache' "$DC" && [ -f "$DCBAK" ]; then
       cp -f "$DCBAK" "$DC"; rm -f "$DCBAK"
-      logger -t "$TAG" "template cache OFF — restored stock DockerClient.php"
+      logger -t "$TAG" "template cache OFF, restored stock DockerClient.php"
     fi
   fi
 fi
@@ -186,12 +193,23 @@ if [ -f "$DL" ]; then
     logger -t "$TAG" "docker stats refresh = 1s (stock)"
   fi
   # respawn the running pusher (if the page is open) so the change takes effect now.
-  # Only kill the real pusher — a php process running the script — never a shell
+  # Only kill the real pusher (a php process running the script), never a shell
   # that merely references the path (matched by cmdline). Check the actual exe.
   for p in $(pgrep -f "nchan/docker_load" 2>/dev/null); do
     [ "$p" = "$$" ] && continue
     case "$(readlink -f /proc/$p/exe 2>/dev/null)" in */php*) kill "$p" 2>/dev/null;; esac
   done
+fi
+
+# Boot hardening. Unraid installs plugins very early: on this build the boot-time
+# run patched DockerClient.php, failed its php -l verification, and rolled back to
+# stock, leaving the speedup silently off until something re-ran this script. The
+# same run produced no syslog output at all, which is the tell that the userspace
+# it needs is not up yet. So if the cache was asked for but is not present when we
+# finish, retry once after the system settles. DPS_RETRY stops it looping.
+if [ "$TEMPLATE_CACHE" = "1" ] && [ "${DPS_RETRY:-0}" != "1" ] && ! grep -q 'templatesCache' "$DC" 2>/dev/null; then
+  logger -t "$TAG" "template cache not applied on this pass; retrying in 90s"
+  nohup bash -c "sleep 90; DPS_RETRY=1 bash '$DIR/apply.sh'" >/dev/null 2>&1 &
 fi
 exit 0
 ]]>
@@ -202,7 +220,7 @@ exit 0
 <INLINE>
 <![CDATA[
 #!/bin/bash
-# unpatch.sh — revert BOTH live patches to stock (called on plugin removal).
+# unpatch.sh: revert BOTH live patches to stock (called on plugin removal).
 TAG="docker-page-speedup"
 DC="/usr/local/emhttp/plugins/dynamix.docker.manager/include/DockerClient.php"; DCBAK="$DC.dpspeedup.orig"
 DL="/usr/local/emhttp/plugins/dynamix.docker.manager/nchan/docker_load";        DLBAK="$DL.dpspeedup.orig"
@@ -235,7 +253,7 @@ Menu="Utilities"
 Title="Docker Page Speedup"
 ---
 <?PHP
-/* Docker Page Speedup — settings. Config auto-loads as $docker_page_speedup_cfg
+/* Docker Page Speedup settings. Config auto-loads as $docker_page_speedup_cfg
    from /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg */
 $cfg = $docker_page_speedup_cfg ?? [];
 $tc  = $cfg['TEMPLATE_CACHE'] ?? '1';
@@ -268,7 +286,7 @@ _Docker stats refresh interval_:
 
 > How often the Docker page refreshes live container CPU/memory stats. The stock
 > 1-second refresh runs `docker stats` on every container each second and repaints
-> the whole table — heavy on CPU and on the browser's GPU while the page is open.
+> the whole table, which is heavy on CPU and on the browser's GPU while the page is open.
 > A higher interval sharply cuts that load. Takes effect on the next Docker page load.
 
 &nbsp;

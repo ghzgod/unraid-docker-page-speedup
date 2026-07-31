@@ -1,0 +1,10 @@
+<CommunityApplications>
+  <Profile>
+Docker Page Speedup makes the Unraid Docker page load faster on servers with a large number of containers, and cuts the CPU and GPU load the page generates while it is open.
+
+It works by adding two in-request caches to the webGUI's Docker template reading, and by letting you throttle how often the page refreshes live container stats. Both changes are applied to the running webGUI in RAM, are verified before being kept, and are reverted on uninstall.
+
+Support and issues: https://github.com/ghzgod/unraid-docker-page-speedup/issues
+  </Profile>
+  <WebPage>https://github.com/ghzgod/unraid-docker-page-speedup</WebPage>
+</CommunityApplications>
