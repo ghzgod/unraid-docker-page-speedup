@@ -1,4 +1,4 @@
-# Docker Page Speedup
+# Unraid Docker Page Speedup
 
 An Unraid plugin that makes the **Docker** page load dramatically faster **and**
 reduces its CPU/GPU load on systems with many containers, with a settings page
@@ -40,7 +40,7 @@ to `1` is the Unraid stock behaviour.
 
 ## Settings
 
-**Settings → Utilities → Docker Page Speedup** (or click the plugin's bolt icon on
+**Settings → Utilities → Unraid Docker Page Speedup** (or click the plugin's bolt icon on
 the Plugins page):
 
 - **Page-load speedup**: Enabled / Disabled (Disabled restores the stock file).

@@ -1,8 +1,8 @@
 Menu="Utilities"
-Title="Docker Page Speedup"
+Title="Unraid Docker Page Speedup"
 ---
 <?PHP
-/* Docker Page Speedup settings. Config auto-loads as $docker_page_speedup_cfg
+/* Unraid Docker Page Speedup settings. Config auto-loads as $docker_page_speedup_cfg
    from /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg */
 $cfg = $docker_page_speedup_cfg ?? [];
 $tc  = $cfg['TEMPLATE_CACHE'] ?? '1';

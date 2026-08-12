@@ -7,7 +7,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-VERSION="${1:-2026.07.31}"
+VERSION="${1:-2026.08.12}"
 NAME="docker.page.speedup"
 SRC="src/usr/local/emhttp/plugins/$NAME"
 OUT="$NAME.plg"
@@ -44,6 +44,10 @@ cat <<XMLHEAD
 
 <CHANGES>
 ##$VERSION
+- Renamed to Unraid Docker Page Speedup, in the plugin, the README and the App
+  Store listing. Same plugin, same settings, nothing else changes.
+
+##2026.07.31
 - Fix: on some systems the boot-time run patched DockerClient.php, failed its own
   php -l verification before the rest of userspace was up, and rolled back to
   stock, leaving the page-load speedup silently off until something re-ran it. If
@@ -88,8 +92,8 @@ chmod +x /usr/local/emhttp/plugins/docker.page.speedup/apply.sh \
 # apply per the saved config
 bash /usr/local/emhttp/plugins/docker.page.speedup/apply.sh
 echo "----------------------------------------------------"
-echo " Docker Page Speedup installed."
-echo " Settings -> Utilities -> Docker Page Speedup (or the bolt icon)."
+echo " Unraid Docker Page Speedup installed."
+echo " Settings -> Utilities -> Unraid Docker Page Speedup (or the bolt icon)."
 echo " Re-applied on every boot. syslog tag: docker-page-speedup"
 echo "----------------------------------------------------"
 ]]>

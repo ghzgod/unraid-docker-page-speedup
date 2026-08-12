@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "docker.page.speedup">
 <!ENTITY author  "ghzgod">
-<!ENTITY version "2026.07.31">
+<!ENTITY version "2026.08.12">
 <!ENTITY launch  "Settings/DockerPageSpeedup">
 <!ENTITY plugin  "https://raw.githubusercontent.com/ghzgod/unraid-docker-page-speedup/main/docker.page.speedup.plg">
 <!ENTITY support "https://github.com/ghzgod/unraid-docker-page-speedup">
@@ -10,6 +10,10 @@
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&plugin;" min="6.12" icon="bolt" support="&support;">
 
 <CHANGES>
+##2026.08.12
+- Renamed to Unraid Docker Page Speedup, in the plugin, the README and the App
+  Store listing. Same plugin, same settings, nothing else changes.
+
 ##2026.07.31
 - Fix: on some systems the boot-time run patched DockerClient.php, failed its own
   php -l verification before the rest of userspace was up, and rolled back to
@@ -250,10 +254,10 @@ STATS_INTERVAL="5"
 <INLINE>
 <![CDATA[
 Menu="Utilities"
-Title="Docker Page Speedup"
+Title="Unraid Docker Page Speedup"
 ---
 <?PHP
-/* Docker Page Speedup settings. Config auto-loads as $docker_page_speedup_cfg
+/* Unraid Docker Page Speedup settings. Config auto-loads as $docker_page_speedup_cfg
    from /boot/config/plugins/docker.page.speedup/docker.page.speedup.cfg */
 $cfg = $docker_page_speedup_cfg ?? [];
 $tc  = $cfg['TEMPLATE_CACHE'] ?? '1';
@@ -300,9 +304,9 @@ _Docker stats refresh interval_:
 <FILE Name="/usr/local/emhttp/plugins/docker.page.speedup/README.md">
 <INLINE>
 <![CDATA[
-**Docker Page Speedup**
+**Unraid Docker Page Speedup**
 
-Makes the Unraid Docker page load faster and cuts its CPU/GPU load on systems with many containers. It caches container-template reads in the webGUI and lets you throttle how often the page refreshes live container stats. Configure it under Settings, Utilities, Docker Page Speedup, or click this plugin's bolt icon.
+Makes the Unraid Docker page load faster and cuts its CPU/GPU load on systems with many containers. It caches container-template reads in the webGUI and lets you throttle how often the page refreshes live container stats. Configure it under Settings, Utilities, Unraid Docker Page Speedup, or click this plugin's bolt icon.
 ]]>
 </INLINE>
 </FILE>
@@ -320,8 +324,8 @@ chmod +x /usr/local/emhttp/plugins/docker.page.speedup/apply.sh \
 # apply per the saved config
 bash /usr/local/emhttp/plugins/docker.page.speedup/apply.sh
 echo "----------------------------------------------------"
-echo " Docker Page Speedup installed."
-echo " Settings -> Utilities -> Docker Page Speedup (or the bolt icon)."
+echo " Unraid Docker Page Speedup installed."
+echo " Settings -> Utilities -> Unraid Docker Page Speedup (or the bolt icon)."
 echo " Re-applied on every boot. syslog tag: docker-page-speedup"
 echo "----------------------------------------------------"
 ]]>
